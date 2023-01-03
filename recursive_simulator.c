@@ -10,6 +10,7 @@
 #include <time.h>
 #include <math.h>
 #include <string.h>
+#include <zlib.h>
 //  #include <png.h>
 //  #include <glib.h>
 
@@ -489,19 +490,51 @@ int main(int argc, const char *argv[])
     registry *m = pulse(model.columns, 0, 0., 1., DOWNWARD, 3., 0);
 
     float *seismic_image = acquire_seismic_image(&model, 3., 0, 256);
+
+    z_stream zs;
+    memset(&zs, 0, sizeof(z_stream));
+    // Initialize zlib stream
+    if (deflateInit(&zs, Z_DEFAULT_COMPRESSION) != Z_OK)
+    {
+        printf("deflateInit failed!\n");
+        return 1;
+    }
+
+    float *output = (float *)malloc(256 * 512 * sizeof(float));
+
+    // Set input and output buffers
+    zs.avail_in = 256 * 512 * sizeof(float);
+    zs.next_in = (Bytef *)seismic_image;
+    zs.avail_out = 256 * 512 * sizeof(float);
+    zs.next_out = (Bytef *)output;
+
+    // Compress the data
+    if (deflate(&zs, Z_FINISH) != Z_STREAM_END)
+    {
+        printf("deflate failed!\n");
+        return 1;
+    }
+
+    // Clean up and return the compressed data size
+    deflateEnd(&zs);
+    int output_len = zs.total_out;
+    printf("Original size: %lu\n", zs.total_in);
+    printf("Compressed size: %d\n", output_len);
+
     FILE *file = fopen("seismic_image.bin", "wb");
     if (file == NULL)
     {
         printf("Error opening file!");
         return 1;
     }
-    size_t count = fwrite(seismic_image, sizeof(float), 512 * 256, file);
-    if (count < 512 * 256)
+    fwrite(output, 1, output_len, file);
+    if (ferror(file))
     {
         printf("Error writing to file!");
         return 1;
     }
     free(seismic_image);
+    free(output);
     fclose(file);
 
     float *geology = rasterize_geology_spd(&model, 256);
@@ -511,8 +544,8 @@ int main(int argc, const char *argv[])
         printf("Error opening file!");
         return 1;
     }
-    count = fwrite(geology, sizeof(float), 512 * 256, file);
-    if (count < 512 * 256)
+    fwrite(geology, sizeof(float), 512 * 256, file);
+    if (ferror(file))
     {
         printf("Error writing to file!");
         return 1;

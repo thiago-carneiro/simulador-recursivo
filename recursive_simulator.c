@@ -94,6 +94,7 @@ void free_geological_model_1d(geological_model_1d *model)
     free(model->reflectivity_upwards);
     free(model->transmissibility_upwards);
     free(model->times);
+    free(model->layers);
 }
 
 void init_geological_model_2d(geological_model_2d *model, unsigned int nx,
@@ -115,6 +116,7 @@ void free_geological_model_2d(geological_model_2d *model)
     {
         free_geological_model_1d(model->columns + x);
     }
+    free(model->columns);
 }
 
 geological_model_2d new_senoidal_model(unsigned int nx, unsigned int nz,
@@ -338,7 +340,6 @@ typedef struct record
 
 typedef struct
 {
-    unsigned int number_records;
     record *first;
     record *last;
 } registry;
@@ -349,14 +350,10 @@ registry *join_registries(registry *a, registry *b)
         return b;
     if (!b)
         return a;
-    registry *c = (registry *)malloc(sizeof(registry));
-    c->number_records = a->number_records + b->number_records;
-    c->first = b->first;
     b->last->next = a->first;
-    c->last = a->last;
+    b->last = a->last;
     free(a);
-    free(b);
-    return c;
+    return b;
 }
 
 void free_registry(registry *a)
@@ -415,7 +412,6 @@ registry *pulse(geological_model_1d *model,
                 ret = (registry *)malloc(sizeof(registry));
                 ret->first = (record *)malloc(sizeof(record));
                 ret->last = ret->first;
-                ret->number_records = 1;
                 ret->first->time = time_i;
                 ret->first->amplitude = signal;
                 ret->first->next = NULL;
@@ -530,7 +526,7 @@ float *rasterize_geology_spd(geological_model_2d *model, unsigned int nz)
     return image;
 }
 
-int batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
+void batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
 {
     printf("Getting ready to generate %s\n", filename);
     geological_model_2d *models = (geological_model_2d *)malloc(batchsize * sizeof(geological_model_2d));
@@ -613,24 +609,20 @@ int batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
 
     printf("Compressed data: %lu\n", zs.total_in);
     printf("Compressed size: %lu\n", zs.total_out);
-    printf("Compression ration: %f\n", zs.total_out / (float)zs.total_in);
+    printf("Compression ratio: %f\n", zs.total_out / (float)zs.total_in);
 
     free(models);
     free(seismic_images);
     free(compression_buffer);
-
-    return 0;
 }
 
 int main(int argc, const char *argv[])
 {
     srand((unsigned int)time(NULL));
 
-    if (batch(100000, 512, 256, "conjunto_treino.bin"))
-        return 1;
-    if (batch(30000, 512, 256, "conjunto_teste.bin"))
-        return 1;
-    if (batch(30000, 512, 256, "conjunto_val.bin"))
-        return 1;
+    batch(100000, 512, 256, "conjunto_treino.bin");
+    batch(30000, 512, 256, "conjunto_teste.bin");
+    batch(30000, 512, 256, "conjunto_val.bin");
+
     return 0;
 }

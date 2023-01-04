@@ -517,7 +517,8 @@ int batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
         float total_elapsed = (loop_time - start) / clocks_per_sec;
         float instant_elapsed = (loop_time - last_time) / clocks_per_sec;
         float total_remaining = (batchsize - i) * total_elapsed / (i + 1);
-        printf("Loop time: %.0fs. Remaining time: %.2fh.\n", instant_elapsed, total_remaining / 3600.);
+        printf("Loop time: %.2fs. Remaining time: %.2fh.\n", instant_elapsed, total_remaining / 3600.);
+        last_time = clock();
     }
     z_stream zs;
     memset(&zs, 0, sizeof(z_stream));

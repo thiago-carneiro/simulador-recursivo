@@ -478,79 +478,80 @@ float *rasterize_geology_spd(geological_model_2d *model, unsigned int nz)
     return image;
 }
 
-int main(int argc, const char *argv[])
+int batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
 {
-    srand((unsigned int)time(NULL));
-    geological_model_2d model = new_senoidal_model(512, 5000, 500., 1000., 1500., 4500., 1., 2.5);
-    // geological_model_2d model = new_parallel_model(512, 0, NULL, NULL, NULL);
-    // geological_model_2d model = new_dome_model(512, NULL, NULL);
-    // geological_model_2d model = new_presalt_model(512, NULL, NULL);
+    geological_model_2d *models = (geological_model_2d *)malloc(batchsize * sizeof(geological_model_2d));
+    if (!models)
+    {
+        printf("Failed to allocate memory for the geological models!");
+        return 1;
+    }
+    float *seismic_images = (float *)malloc(2 * batchsize * nx * nz * sizeof(float));
+    if (!seismic_images)
+    {
+        printf("Failed to allocate memory for the seismic images!");
+        return 1;
+    }
+    Bytef *compression_buffer = (Bytef *)malloc(2 * batchsize * nx * nz * sizeof(float));
+    if (!compression_buffer)
+    {
+        printf("Failed to allocate memory for the zlib compression!");
+        return 1;
+    }
 
-    //    printf("\n", model.columns[0]);
-    registry *m = pulse(model.columns, 0, 0., 1., DOWNWARD, 3., 0);
-
-    float *seismic_image = acquire_seismic_image(&model, 3., 0, 256);
-
+    for (size_t i = 0; i < batchsize; i++)
+    {
+        models[i] = new_senoidal_model(nx, 10000, 500., 1000., 1500., 4500., 1., 2.5);
+        float *seismic_image_complete = acquire_seismic_image(models + i, 3., 0, nz);
+        memcpy(seismic_images + 2 * i * nx * nz, seismic_image_complete, nx * nz * sizeof(float));
+        float *seismic_image_clean = acquire_seismic_image(models + i, 3., 1, nz);
+        memcpy(seismic_images + (2 * i + 1) * nx * nz, seismic_image_clean, nx * nz * sizeof(float));
+    }
     z_stream zs;
     memset(&zs, 0, sizeof(z_stream));
-    // Initialize zlib stream
     if (deflateInit(&zs, Z_DEFAULT_COMPRESSION) != Z_OK)
     {
         printf("deflateInit failed!\n");
         return 1;
     }
 
-    float *output = (float *)malloc(256 * 512 * sizeof(float));
+    zs.avail_in = 2 * batchsize * nx * nz * sizeof(float);
+    zs.next_in = (Bytef *)seismic_images;
+    zs.avail_out = 2 * batchsize * nx * nz * sizeof(float);
+    zs.next_out = (Bytef *)compression_buffer;
 
-    // Set input and output buffers
-    zs.avail_in = 256 * 512 * sizeof(float);
-    zs.next_in = (Bytef *)seismic_image;
-    zs.avail_out = 256 * 512 * sizeof(float);
-    zs.next_out = (Bytef *)output;
-
-    // Compress the data
     if (deflate(&zs, Z_FINISH) != Z_STREAM_END)
     {
         printf("deflate failed!\n");
         return 1;
     }
 
-    // Clean up and return the compressed data size
     deflateEnd(&zs);
-    int output_len = zs.total_out;
-    printf("Original size: %lu\n", zs.total_in);
-    printf("Compressed size: %d\n", output_len);
 
-    FILE *file = fopen("seismic_image.bin", "wb");
+    FILE *file = fopen(filename, "wb");
     if (file == NULL)
     {
         printf("Error opening file!");
         return 1;
     }
-    fwrite(output, 1, output_len, file);
+    fwrite(compression_buffer, 1, zs.total_out, file);
     if (ferror(file))
     {
         printf("Error writing to file!");
         return 1;
     }
-    free(seismic_image);
-    free(output);
     fclose(file);
 
-    float *geology = rasterize_geology_spd(&model, 256);
-    file = fopen("geological_image.bin", "wb");
-    if (file == NULL)
-    {
-        printf("Error opening file!");
-        return 1;
-    }
-    fwrite(geology, sizeof(float), 512 * 256, file);
-    if (ferror(file))
-    {
-        printf("Error writing to file!");
-        return 1;
-    }
-    free(geology);
-    fclose(file);
+    free(models);
+    free(seismic_images);
+    free(compression_buffer);
+
     return 0;
+}
+
+int main(int argc, const char *argv[])
+{
+    srand((unsigned int)time(NULL));
+
+    return batch(10, 512, 256, "seismic_images.bin");
 }

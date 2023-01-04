@@ -11,6 +11,7 @@
 #include <math.h>
 #include <string.h>
 #include <zlib.h>
+#include <pthread.h>
 //  #include <png.h>
 //  #include <glib.h>
 
@@ -423,9 +424,22 @@ registry *pulse(geological_model_1d *model,
     return ret;
 }
 
-float *measure_signals(geological_model_1d *model,
-                       float max_time, unsigned int remove_multiples, unsigned int nz)
+struct parameters
 {
+    geological_model_1d *model;
+    float max_time;
+    unsigned int remove_multiples;
+    unsigned int nz;
+};
+
+void *measure_signals(void *param)
+{
+    struct parameters *arg = (struct parameters *)param;
+    geological_model_1d *model = arg->model;
+    float max_time = arg->max_time;
+    unsigned int remove_multiples = arg->remove_multiples;
+    unsigned int nz = arg->nz;
+
     registry *m = pulse(model, 0, 0., 1., DOWNWARD, max_time, remove_multiples);
     float *signals = (float *)malloc(nz * sizeof(float));
     for (unsigned int i = 0; i < nz; i++)
@@ -441,19 +455,39 @@ float *measure_signals(geological_model_1d *model,
         signal = signal->next;
     }
     free(m);
-    return signals;
+    return (void *)signals;
 }
 
 float *acquire_seismic_image(geological_model_2d *model,
                              float max_time, unsigned int remove_multiples, unsigned int nz)
 {
     float *seismic_image = (float *)malloc(model->nx * nz * (sizeof(float)));
+    pthread_t threads[model->nx];
     for (unsigned int x = 0; x < model->nx; x++)
     {
-        float *column_measurement = measure_signals(model->columns + x, max_time,
-                                                    remove_multiples, nz);
-        memcpy(seismic_image + (x * nz), column_measurement, nz * sizeof(float));
-        free(column_measurement);
+        int status;
+        struct parameters param =
+            {
+                .model = model->columns + x,
+                .max_time = max_time,
+                .remove_multiples = remove_multiples,
+                .nz = nz};
+        status = pthread_create(threads + x, NULL, measure_signals, (void *)&param);
+        if (status)
+        {
+            printf("Error creating thread #%u\n", x);
+            exit(EXIT_FAILURE);
+        }
+    }
+    void *column_measurements[model->nx];
+    for (unsigned int x = 0; x < model->nx; x++)
+    {
+        pthread_join(threads[x], column_measurements + x);
+        memcpy(seismic_image + (x * nz), column_measurements[x], nz * sizeof(float));
+    }
+    for (unsigned int x = 0; x < model->nx; x++)
+    {
+        free(column_measurements[x]);
     }
     return seismic_image;
 }

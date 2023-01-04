@@ -197,6 +197,8 @@ geological_model_2d new_senoidal_model(unsigned int nx, unsigned int nz,
     }
     geological_model_2d model;
     init_geological_model_2d(&model, nx, columns);
+    free(speed);
+    free(rho);
     return model;
 }
 
@@ -357,6 +359,21 @@ registry *join_registries(registry *a, registry *b)
     return c;
 }
 
+void free_registry(registry *a)
+{
+    if (!a)
+        return;
+    record *rec = a->first;
+    record *next;
+    while ((next = rec->next))
+    {
+        free(rec);
+        rec = next;
+    }
+    free(rec);
+    return;
+}
+
 typedef enum
 {
     UPWARD,
@@ -454,6 +471,7 @@ void *measure_signals(void *param)
         signals[bin] += signal->amplitude;
         signal = signal->next;
     }
+    free_registry(m);
     free(m);
     return (void *)signals;
 }
@@ -519,19 +537,19 @@ int batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
     if (!models)
     {
         printf("Failed to allocate memory for the geological models!\n");
-        return 1;
+        exit(EXIT_FAILURE);
     }
     float *seismic_images = (float *)malloc(2 * batchsize * nx * nz * sizeof(float));
     if (!seismic_images)
     {
         printf("Failed to allocate memory for the seismic images!\n");
-        return 1;
+        exit(EXIT_FAILURE);
     }
     Bytef *compression_buffer = (Bytef *)malloc(2 * batchsize * nx * nz * sizeof(float));
     if (!compression_buffer)
     {
         printf("Failed to allocate memory for the zlib compression!\n");
-        return 1;
+        exit(EXIT_FAILURE);
     }
 
     struct timespec start, loop_time, last_time;
@@ -551,6 +569,9 @@ int batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
         float instant_elapsed = loop_time.tv_sec - last_time.tv_sec + (loop_time.tv_nsec - last_time.tv_nsec) * 1e-9;
         float total_remaining = (batchsize - i) * total_elapsed / (i + 1);
         printf("Loop time: %.2fs. Running time: %.2fh. Remaining time: %.2fh.\n", instant_elapsed, total_elapsed / 3600., total_remaining / 3600.);
+        free_geological_model_2d(models + i);
+        free(seismic_image_complete);
+        free(seismic_image_clean);
         clock_gettime(CLOCK_REALTIME, &last_time);
     }
 
@@ -560,7 +581,7 @@ int batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
     if (deflateInit(&zs, Z_DEFAULT_COMPRESSION) != Z_OK)
     {
         printf("deflateInit failed!\n");
-        return 1;
+        exit(EXIT_FAILURE);
     }
 
     zs.avail_in = 2 * batchsize * nx * nz * sizeof(float);
@@ -571,7 +592,7 @@ int batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
     if (deflate(&zs, Z_FINISH) != Z_STREAM_END)
     {
         printf("deflate failed!\n");
-        return 1;
+        exit(EXIT_FAILURE);
     }
 
     deflateEnd(&zs);
@@ -580,13 +601,13 @@ int batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
     if (file == NULL)
     {
         printf("Error opening file!\n");
-        return 1;
+        exit(EXIT_FAILURE);
     }
     fwrite(compression_buffer, 1, zs.total_out, file);
     if (ferror(file))
     {
         printf("Error writing to file!\n");
-        return 1;
+        exit(EXIT_FAILURE);
     }
     fclose(file);
 

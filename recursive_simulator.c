@@ -480,32 +480,44 @@ float *rasterize_geology_spd(geological_model_2d *model, unsigned int nz)
 
 int batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
 {
+    printf("Getting ready to generate %s\n", filename);
     geological_model_2d *models = (geological_model_2d *)malloc(batchsize * sizeof(geological_model_2d));
     if (!models)
     {
-        printf("Failed to allocate memory for the geological models!");
+        printf("Failed to allocate memory for the geological models!\n");
         return 1;
     }
     float *seismic_images = (float *)malloc(2 * batchsize * nx * nz * sizeof(float));
     if (!seismic_images)
     {
-        printf("Failed to allocate memory for the seismic images!");
+        printf("Failed to allocate memory for the seismic images!\n");
         return 1;
     }
     Bytef *compression_buffer = (Bytef *)malloc(2 * batchsize * nx * nz * sizeof(float));
     if (!compression_buffer)
     {
-        printf("Failed to allocate memory for the zlib compression!");
+        printf("Failed to allocate memory for the zlib compression!\n");
         return 1;
     }
 
+    clock_t start = clock();
+    clock_t loop_time;
+    clock_t last_time = clock();
+    float clocks_per_sec = (float)CLOCKS_PER_SEC;
+
     for (size_t i = 0; i < batchsize; i++)
     {
+        printf("Generating data %zu of %zu. ", i + 1, batchsize);
         models[i] = new_senoidal_model(nx, 10000, 500., 1000., 1500., 4500., 1., 2.5);
         float *seismic_image_complete = acquire_seismic_image(models + i, 3., 0, nz);
         memcpy(seismic_images + 2 * i * nx * nz, seismic_image_complete, nx * nz * sizeof(float));
         float *seismic_image_clean = acquire_seismic_image(models + i, 3., 1, nz);
         memcpy(seismic_images + (2 * i + 1) * nx * nz, seismic_image_clean, nx * nz * sizeof(float));
+        loop_time = clock();
+        float total_elapsed = (loop_time - start) / clocks_per_sec;
+        float instant_elapsed = (loop_time - last_time) / clocks_per_sec;
+        float total_remaining = (batchsize - i) * total_elapsed / (i + 1);
+        printf("Loop time: %.0fs. Remaining time: %.2fh.\n", instant_elapsed, total_remaining / 3600.);
     }
     z_stream zs;
     memset(&zs, 0, sizeof(z_stream));
@@ -531,13 +543,13 @@ int batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
     FILE *file = fopen(filename, "wb");
     if (file == NULL)
     {
-        printf("Error opening file!");
+        printf("Error opening file!\n");
         return 1;
     }
     fwrite(compression_buffer, 1, zs.total_out, file);
     if (ferror(file))
     {
-        printf("Error writing to file!");
+        printf("Error writing to file!\n");
         return 1;
     }
     fclose(file);

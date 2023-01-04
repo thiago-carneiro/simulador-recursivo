@@ -555,6 +555,10 @@ int batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
     }
     fclose(file);
 
+    printf("Compressed data: %lu\n", zs.total_in);
+    printf("Compressed size: %lu\n", zs.total_out);
+    printf("Compression ration: %f\n", zs.total_out / (float)zs.total_in);
+
     free(models);
     free(seismic_images);
     free(compression_buffer);

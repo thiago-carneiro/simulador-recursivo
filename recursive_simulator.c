@@ -565,5 +565,11 @@ int main(int argc, const char *argv[])
 {
     srand((unsigned int)time(NULL));
 
-    return batch(10, 512, 256, "seismic_images.bin");
+    if (batch(100000, 512, 256, "conjunto_treino.bin"))
+        return 1;
+    if (batch(30000, 512, 256, "conjunto_teste.bin"))
+        return 1;
+    if (batch(30000, 512, 256, "conjunto_val.bin"))
+        return 1;
+    return 0;
 }

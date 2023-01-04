@@ -534,10 +534,9 @@ int batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
         return 1;
     }
 
-    clock_t start = clock();
-    clock_t loop_time;
-    clock_t last_time = clock();
-    float clocks_per_sec = (float)CLOCKS_PER_SEC;
+    struct timespec start, loop_time, last_time;
+    clock_gettime(CLOCK_REALTIME, &start);
+    clock_gettime(CLOCK_REALTIME, &last_time);
 
     for (size_t i = 0; i < batchsize; i++)
     {
@@ -547,13 +546,15 @@ int batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
         memcpy(seismic_images + 2 * i * nx * nz, seismic_image_complete, nx * nz * sizeof(float));
         float *seismic_image_clean = acquire_seismic_image(models + i, 3., 1, nz);
         memcpy(seismic_images + (2 * i + 1) * nx * nz, seismic_image_clean, nx * nz * sizeof(float));
-        loop_time = clock();
-        float total_elapsed = (loop_time - start) / clocks_per_sec;
-        float instant_elapsed = (loop_time - last_time) / clocks_per_sec;
+        clock_gettime(CLOCK_REALTIME, &loop_time);
+        float total_elapsed = loop_time.tv_sec - start.tv_sec + (loop_time.tv_nsec - start.tv_nsec) * 1e-9;
+        float instant_elapsed = loop_time.tv_sec - last_time.tv_sec + (loop_time.tv_nsec - last_time.tv_nsec) * 1e-9;
         float total_remaining = (batchsize - i) * total_elapsed / (i + 1);
-        printf("Loop time: %.2fs. Remaining time: %.2fh.\n", instant_elapsed, total_remaining / 3600.);
-        last_time = clock();
+        printf("Loop time: %.2fs. Running time: %.2fh. Remaining time: %.2fh.\n", instant_elapsed, total_elapsed / 3600., total_remaining / 3600.);
+        clock_gettime(CLOCK_REALTIME, &last_time);
     }
+
+    printf("Finished simulation for %s. Now compressing.\n", filename);
     z_stream zs;
     memset(&zs, 0, sizeof(z_stream));
     if (deflateInit(&zs, Z_DEFAULT_COMPRESSION) != Z_OK)

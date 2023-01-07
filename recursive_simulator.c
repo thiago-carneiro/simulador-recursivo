@@ -12,6 +12,7 @@
 #include <string.h>
 #include <zlib.h>
 #include <pthread.h>
+#include <limits.h>
 //  #include <png.h>
 //  #include <glib.h>
 
@@ -579,7 +580,7 @@ void batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
     }
 
     printf("Finished simulation for %s. Now compressing.\n", filename);
-    uLongf compressed_size;
+    uLongf compressed_size = source_size;
 
     if (Z_OK != compress2((Bytef *)compression_buffer, &compressed_size, (Bytef *)seismic_images, source_size, Z_BEST_COMPRESSION))
     {

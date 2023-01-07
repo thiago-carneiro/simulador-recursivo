@@ -11,8 +11,7 @@
 #include <math.h>
 #include <string.h>
 #include <zlib.h>
-#include <pthread.h>
-#include <limits.h>
+#include <mpi.h>
 //  #include <png.h>
 //  #include <glib.h>
 
@@ -446,14 +445,9 @@ struct parameters
     unsigned int nz;
 };
 
-void *measure_signals(void *param)
+float *measure_signals(geological_model_1d *model,
+                       float max_time, unsigned int remove_multiples, unsigned int nz)
 {
-    struct parameters *arg = (struct parameters *)param;
-    geological_model_1d *model = arg->model;
-    float max_time = arg->max_time;
-    unsigned int remove_multiples = arg->remove_multiples;
-    unsigned int nz = arg->nz;
-
     registry *m = pulse(model, 0, 0., 1., DOWNWARD, max_time, remove_multiples);
     float *signals = (float *)malloc(nz * sizeof(float));
     for (unsigned int i = 0; i < nz; i++)
@@ -468,41 +462,20 @@ void *measure_signals(void *param)
         signals[bin] += signal->amplitude;
         signal = signal->next;
     }
-    free_registry(m);
     free(m);
-    return (void *)signals;
+    return signals;
 }
 
 float *acquire_seismic_image(geological_model_2d *model,
                              float max_time, unsigned int remove_multiples, unsigned int nz)
 {
     float *seismic_image = (float *)malloc(model->nx * nz * (sizeof(float)));
-    pthread_t threads[model->nx];
     for (unsigned int x = 0; x < model->nx; x++)
     {
-        int status;
-        struct parameters param =
-            {
-                .model = model->columns + x,
-                .max_time = max_time,
-                .remove_multiples = remove_multiples,
-                .nz = nz};
-        status = pthread_create(threads + x, NULL, measure_signals, (void *)&param);
-        if (status)
-        {
-            printf("Error creating thread #%u\n", x);
-            exit(EXIT_FAILURE);
-        }
-    }
-    void *column_measurements[model->nx];
-    for (unsigned int x = 0; x < model->nx; x++)
-    {
-        pthread_join(threads[x], column_measurements + x);
-        memcpy(seismic_image + (x * nz), column_measurements[x], nz * sizeof(float));
-    }
-    for (unsigned int x = 0; x < model->nx; x++)
-    {
-        free(column_measurements[x]);
+        float *column_measurement = measure_signals(model->columns + x, max_time,
+                                                    remove_multiples, nz);
+        memcpy(seismic_image + (x * nz), column_measurement, nz * sizeof(float));
+        free(column_measurement);
     }
     return seismic_image;
 }
@@ -527,8 +500,25 @@ float *rasterize_geology_spd(geological_model_2d *model, unsigned int nz)
     return image;
 }
 
-void batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
+void batch(size_t number_simulations, unsigned int nx, unsigned int nz, char *filename)
 {
+    int number_procs;
+    MPI_Comm_size(MPI_COMM_WORLD, &number_procs);
+
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+    size_t batchsize = number_simulations / number_procs;
+
+    size_t buffer_size = 2 * batchsize * nx * nz * sizeof(float);
+
+    uLong source_size = 2 * number_simulations * nx * nz * sizeof(float);
+    if (source_size != 2 * number_simulations * nx * nz * sizeof(float))
+    {
+        printf("Error: buffer too large for zlib compress2.");
+        exit(EXIT_FAILURE);
+    }
+
     printf("Getting ready to generate %s\n", filename);
     geological_model_2d *models = (geological_model_2d *)malloc(batchsize * sizeof(geological_model_2d));
     if (!models)
@@ -536,24 +526,28 @@ void batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
         printf("Failed to allocate memory for the geological models!\n");
         exit(EXIT_FAILURE);
     }
-    float *seismic_images = (float *)malloc(2 * batchsize * nx * nz * sizeof(float));
+    float *seismic_images = (float *)malloc(buffer_size);
     if (!seismic_images)
     {
         printf("Failed to allocate memory for the seismic images!\n");
         exit(EXIT_FAILURE);
     }
-    Bytef *compression_buffer = (Bytef *)malloc(2 * batchsize * nx * nz * sizeof(float));
-    if (!compression_buffer)
+    float *gathered_data = NULL;
+    Bytef *compression_buffer = NULL;
+    if (!rank)
     {
-        printf("Failed to allocate memory for the zlib compression!\n");
-        exit(EXIT_FAILURE);
-    }
-
-    uLong source_size = 2 * batchsize * nx * nz * sizeof(float);
-    if (source_size != 2 * batchsize * nx * nz * sizeof(float))
-    {
-        printf("Error: buffer too large for zlib compress2.");
-        exit(EXIT_FAILURE);
+        gathered_data = (float *)malloc(source_size);
+        if (!gathered_data)
+        {
+            printf("Failed to allocate memory for the results!\n");
+            exit(EXIT_FAILURE);
+        }
+        compression_buffer = (Bytef *)malloc(source_size);
+        if (!compression_buffer)
+        {
+            printf("Failed to allocate memory for the zlib compression!\n");
+            exit(EXIT_FAILURE);
+        }
     }
 
     struct timespec start, loop_time, last_time;
@@ -562,7 +556,8 @@ void batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
 
     for (size_t i = 0; i < batchsize; i++)
     {
-        printf("Generating data %zu of %zu. ", i + 1, batchsize);
+        printf("%s :: Rank %d :: ", filename, rank);
+        printf("Simulation %zu of %zu. ", i + 1, batchsize);
         models[i] = new_senoidal_model(nx, 10000, 500., 1000., 1500., 4500., 1., 2.5);
         float *seismic_image_complete = acquire_seismic_image(models + i, 3., 0, nz);
         memcpy(seismic_images + 2 * i * nx * nz, seismic_image_complete, nx * nz * sizeof(float));
@@ -578,47 +573,53 @@ void batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
         free(seismic_image_clean);
         clock_gettime(CLOCK_REALTIME, &last_time);
     }
+    MPI_Gather(seismic_images, buffer_size, MPI_FLOAT, gathered_data, buffer_size, MPI_FLOAT, 0, MPI_COMM_WORLD);
 
-    printf("Finished simulation for %s. Now compressing.\n", filename);
     uLongf compressed_size = source_size;
+    FILE *file;
 
-    if (Z_OK != compress2((Bytef *)compression_buffer, &compressed_size, (Bytef *)seismic_images, source_size, Z_BEST_COMPRESSION))
+    if (!rank)
     {
-        printf("Error during compression.\n");
-        exit(EXIT_FAILURE);
-    }
-    printf("Compression sucessful.\n");
+        printf("\nFinished simulations for %s. Now compressing.\n", filename);
+        if (Z_OK != compress2((Bytef *)compression_buffer, &compressed_size, (Bytef *)gathered_data, source_size, Z_BEST_COMPRESSION))
+        {
+            printf("Error during compression.\n");
+            exit(EXIT_FAILURE);
+        }
+        printf("Compression sucessful.\n");
 
-    FILE *file = fopen(filename, "wb");
-    if (file == NULL)
-    {
-        printf("Error opening file!\n");
-        exit(EXIT_FAILURE);
-    }
-    fwrite(compression_buffer, 1, compressed_size, file);
-    if (ferror(file))
-    {
-        printf("Error writing to file!\n");
-        exit(EXIT_FAILURE);
-    }
-    fclose(file);
+        file = fopen(filename, "wb");
+        if (file == NULL)
+        {
+            printf("Error opening file!\n");
+            exit(EXIT_FAILURE);
+        }
+        fwrite(compression_buffer, 1, compressed_size, file);
+        if (ferror(file))
+        {
+            printf("Error writing to file!\n");
+            exit(EXIT_FAILURE);
+        }
+        fclose(file);
 
-    printf("Uncompressed data: %lu\n", source_size);
-    printf("Compressed size: %lu\n", compressed_size);
-    printf("Compression ratio: %.2f\n", compressed_size / (float)source_size);
-
+        printf("\tUncompressed data: %lu\n", source_size);
+        printf("\tCompressed size: %lu\n", compressed_size);
+        printf("\tCompression ratio: %.2f\n\n", compressed_size / (float)source_size);
+        free(compression_buffer);
+        free(gathered_data);
+    }
     free(models);
     free(seismic_images);
-    free(compression_buffer);
 }
 
-int main(int argc, const char *argv[])
+int main(int argc, char *argv[])
 {
+    MPI_Init(&argc, &argv);
     srand((unsigned int)time(NULL));
 
     batch(100000, 512, 256, "train.zlib");
     batch(30000, 512, 256, "test.zlib");
     batch(30000, 512, 256, "val.zlib");
-
+    MPI_Finalize();
     return 0;
 }

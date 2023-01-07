@@ -548,6 +548,13 @@ void batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
         exit(EXIT_FAILURE);
     }
 
+    uLong source_size = 2 * batchsize * nx * nz * sizeof(float);
+    if (source_size != 2 * batchsize * nx * nz * sizeof(float))
+    {
+        printf("Error: buffer too large for zlib compress2.");
+        exit(EXIT_FAILURE);
+    }
+
     struct timespec start, loop_time, last_time;
     clock_gettime(CLOCK_REALTIME, &start);
     clock_gettime(CLOCK_REALTIME, &last_time);
@@ -572,26 +579,14 @@ void batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
     }
 
     printf("Finished simulation for %s. Now compressing.\n", filename);
-    z_stream zs;
-    memset(&zs, 0, sizeof(z_stream));
-    if (deflateInit(&zs, Z_DEFAULT_COMPRESSION) != Z_OK)
+    uLongf compressed_size;
+
+    if (Z_OK != compress2((Bytef *)compression_buffer, &compressed_size, (Bytef *)seismic_images, source_size, Z_BEST_COMPRESSION))
     {
-        printf("deflateInit failed!\n");
+        printf("Error during compression.\n");
         exit(EXIT_FAILURE);
     }
-
-    zs.avail_in = 2 * batchsize * nx * nz * sizeof(float);
-    zs.next_in = (Bytef *)seismic_images;
-    zs.avail_out = 2 * batchsize * nx * nz * sizeof(float);
-    zs.next_out = (Bytef *)compression_buffer;
-
-    if (deflate(&zs, Z_FINISH) != Z_STREAM_END)
-    {
-        printf("deflate failed!\n");
-        exit(EXIT_FAILURE);
-    }
-
-    deflateEnd(&zs);
+    printf("Compression sucessful.\n");
 
     FILE *file = fopen(filename, "wb");
     if (file == NULL)
@@ -599,7 +594,7 @@ void batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
         printf("Error opening file!\n");
         exit(EXIT_FAILURE);
     }
-    fwrite(compression_buffer, 1, zs.total_out, file);
+    fwrite(compression_buffer, 1, compressed_size, file);
     if (ferror(file))
     {
         printf("Error writing to file!\n");
@@ -607,9 +602,9 @@ void batch(size_t batchsize, unsigned int nx, unsigned int nz, char *filename)
     }
     fclose(file);
 
-    printf("Compressed data: %lu\n", zs.total_in);
-    printf("Compressed size: %lu\n", zs.total_out);
-    printf("Compression ratio: %f\n", zs.total_out / (float)zs.total_in);
+    printf("Uncompressed data: %lu\n", source_size);
+    printf("Compressed size: %lu\n", compressed_size);
+    printf("Compression ratio: %.2f\n", compressed_size / (float)source_size);
 
     free(models);
     free(seismic_images);
@@ -620,9 +615,9 @@ int main(int argc, const char *argv[])
 {
     srand((unsigned int)time(NULL));
 
-    batch(100000, 512, 256, "conjunto_treino.bin");
-    batch(30000, 512, 256, "conjunto_teste.bin");
-    batch(30000, 512, 256, "conjunto_val.bin");
+    batch(100000, 512, 256, "train.zlib");
+    batch(30000, 512, 256, "test.zlib");
+    batch(30000, 512, 256, "val.zlib");
 
     return 0;
 }
